@@ -308,15 +308,6 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             if (mean_average_precision > 0) printf("\n Last accuracy mAP@%0.2f = %2.2f %%, best = %2.2f %% ", iou_thresh, mean_average_precision * 100, best_map * 100);
         }
 
-        #ifndef WIN32
-        if (mean_average_precision > 0.0) {
-            printf("\033]2;%d/%d: loss=%0.1f map=%0.2f best=%0.2f hours left=%0.1f\007", iteration, net.max_batches, loss, mean_average_precision, best_map, avg_time);
-        }
-        else {
-            printf("\033]2;%d/%d: loss=%0.1f hours left=%0.1f\007", iteration, net.max_batches, loss, avg_time);
-        }
-        #endif
-
         if (net.cudnn_half) {
             if (iteration < net.burn_in * 3) fprintf(stderr, "\n Tensor Cores are disabled until the first %d iterations are reached.\n", 3 * net.burn_in);
             else fprintf(stderr, "\n Tensor Cores are used.\n");
@@ -857,19 +848,21 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
     list *plist = get_paths(valid_images);
     char **paths = (char **)list_to_array(plist);
 
-    //layer l = net.layers[net.n - 1];
+    // layer l = net.layers[net.n - 1];
+    // printf("clasess %d \n", l.classes);
 
     int j, k;
 
     int m = plist->size;
     int i = 0;
 
-    float thresh = .001;
-    float iou_thresh = .5;
-    float nms = .4;
+    float thresh = .001; // 0.001
+    float iou_thresh = .5; //0.5
+    float nms = .6; //0.4
 
     int total = 0;
     int correct = 0;
+    int fp = 0;
     int proposals = 0;
     float avg_iou = 0;
 
@@ -881,14 +874,17 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
         network_predict(net, sized.data);
         int nboxes = 0;
         int letterbox = 0;
-        detection *dets = get_network_boxes(&net, sized.w, sized.h, thresh, .5, 0, 1, &nboxes, letterbox);
-        if (nms) do_nms_obj(dets, nboxes, 1, nms);
+        detection *dets = get_network_boxes(&net, sized.w, sized.h, thresh, .5, 0, 1, &nboxes, letterbox); // .5
+        if (nms) do_nms_obj(dets, nboxes, 1, nms); // 1
+
+        printf("BOXES %d \n", nboxes);
 
         char labelpath[4096];
         replace_image_to_label(path, labelpath);
 
         int num_labels = 0;
         box_label *truth = read_boxes(labelpath, &num_labels);
+        //printf(" labels %d, boex %d \n", num_labels, nboxes);
         for (k = 0; k < nboxes; ++k) {
             if (dets[k].objectness > thresh) {
                 ++proposals;
@@ -896,10 +892,16 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
         }
         for (j = 0; j < num_labels; ++j) {
             ++total;
+            // printf("ID : %d\n", truth[j].id);
+            // if(truth[j].id == 0){
+            //     ++total;
+
+            
             box t = { truth[j].x, truth[j].y, truth[j].w, truth[j].h };
             float best_iou = 0;
             for (k = 0; k < nboxes; ++k) {
                 float iou = box_iou(dets[k].bbox, t);
+                // printf("objectness %f, prob %f, iou %f, best iou %f \n", dets[k].objectness, dets[k].prob[0], iou, best_iou); 
                 if (dets[k].objectness > thresh && iou > best_iou) {
                     best_iou = iou;
                 }
@@ -908,14 +910,21 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
             if (best_iou > iou_thresh) {
                 ++correct;
             }
+            else{
+                ++fp;
+            }
+
+            // }
         }
         //fprintf(stderr, " %s - %s - ", paths[i], labelpath);
-        fprintf(stderr, "%5d %5d %5d\tRPs/Img: %.2f\tIOU: %.2f%%\tRecall:%.2f%%\n", i, correct, total, (float)proposals / (i + 1), avg_iou * 100 / total, 100.*correct / total);
-        free(truth);
+        // fprintf(stderr, "%5d %5d %5d\tRPs/Img: %.2f\tIOU: %.2f%%\tRecall:%.2f%%\n", i, correct, total, (float)proposals / (i + 1), avg_iou * 100 / total, 100.*correct / total);
         free(id);
         free_image(orig);
         free_image(sized);
     }
+  
+  printf("Tot %d , TP %d, FP %d\n",total, correct, fp);
+
 }
 
 typedef struct {
@@ -980,12 +989,12 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     list *plist = get_paths(valid_images);
     char **paths = (char **)list_to_array(plist);
 
-    list *plist_dif = NULL;
     char **paths_dif = NULL;
     if (difficult_valid_images) {
-        plist_dif = get_paths(difficult_valid_images);
+        list *plist_dif = get_paths(difficult_valid_images);
         paths_dif = (char **)list_to_array(plist_dif);
     }
+
 
     layer l = net.layers[net.n - 1];
     int k;
@@ -1002,8 +1011,8 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     int i = 0;
     int t;
 
-    const float thresh = .005;
-    const float nms = .45;
+    const float thresh = 0.001; //.005;
+    const float nms = .6;
     //const float iou_thresh = 0.5;
 
     int nthreads = 4;
@@ -1046,7 +1055,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     }
     time_t start = time(0);
     for (i = nthreads; i < m + nthreads; i += nthreads) {
-        fprintf(stderr, "\r%d", i);
+        // fprintf(stderr, "\r%d", i);
         for (t = 0; t < nthreads && (i + t - nthreads) < m; ++t) {
             pthread_join(thr[t], 0);
             val[t] = buf[t];
@@ -1061,6 +1070,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
         for (t = 0; t < nthreads && i + t - nthreads < m; ++t) {
             const int image_index = i + t - nthreads;
             char *path = paths[image_index];
+            // printf("\n image = %s \n", path);
             char *id = basecfg(path);
             float *X = val_resized[t].data;
             network_predict(net, X);
@@ -1070,15 +1080,19 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
             detection *dets;
             if (args.type == LETTERBOX_DATA) {
                 dets = get_network_boxes(&net, val[t].w, val[t].h, thresh, hier_thresh, 0, 1, &nboxes, letter_box);
+                //printf("\n width = %d, height = %d, letter_box = %d \n", val[t].w, val[t].h, letter_box);
             }
             else {
                 dets = get_network_boxes(&net, 1, 1, thresh, hier_thresh, 0, 0, &nboxes, letter_box);
+                //printf("\n ===================== letter_box = IMAGE_DATA ==================\n");
             }
             //detection *dets = get_network_boxes(&net, val[t].w, val[t].h, thresh, hier_thresh, 0, 1, &nboxes, letter_box); // for letter_box=1
             if (nms) {
                 if (l.nms_kind == DEFAULT_NMS) do_nms_sort(dets, nboxes, l.classes, nms);
                 else diounms_sort(dets, nboxes, l.classes, nms, l.nms_kind, l.beta_nms);
             }
+
+            // printf("BOXES %d \n", nboxes);
 
             //if (l.embedding_size) set_track_id(dets, nboxes, thresh, l.sim_thresh, l.track_ciou_norm, l.track_history_size, l.dets_for_track, l.dets_for_show);
 
@@ -1107,12 +1121,17 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
             const int checkpoint_detections_count = detections_count;
 
             int i;
+
+            // printf("nboxes %d \n", nboxes);
+
             for (i = 0; i < nboxes; ++i) {
 
                 int class_id;
                 for (class_id = 0; class_id < classes; ++class_id) {
                     float prob = dets[i].prob[class_id];
+                    
                     if (prob > 0) {
+                       
                         detections_count++;
                         detections = (box_prob*)xrealloc(detections, detections_count * sizeof(box_prob));
                         detections[detections_count - 1].b = dets[i].bbox;
@@ -1124,16 +1143,19 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
                         int truth_index = -1;
                         float max_iou = 0;
+                        //printf("num_labels %d \n",  num_labels);
                         for (j = 0; j < num_labels; ++j)
                         {
                             box t = { truth[j].x, truth[j].y, truth[j].w, truth[j].h };
-                            //printf(" IoU = %f, prob = %f, class_id = %d, truth[j].id = %d \n",
-                            //    box_iou(dets[i].bbox, t), prob, class_id, truth[j].id);
+                            // printf(" IoU = %f, prob = %f, truth_index = %d \n", box_iou(dets[i].bbox, t), prob, truth_index);
                             float current_iou = box_iou(dets[i].bbox, t);
-                            if (current_iou > iou_thresh && class_id == truth[j].id) {
+                            // printf("current iou %f \n",  current_iou);
+                            if (current_iou > iou_thresh && class_id == truth[j].id) {  // reducing iou_thresh increase recall without redusing precision
                                 if (current_iou > max_iou) {
                                     max_iou = current_iou;
+                                    //printf("current iou %f \n",  current_iou);
                                     truth_index = unique_truth_count + j;
+                                    
                                 }
                             }
                         }
@@ -1156,7 +1178,8 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
                         }
 
                         // calc avg IoU, true-positives, false-positives for required Threshold
-                        if (prob > thresh_calc_avg_iou) {
+                        if (prob > thresh_calc_avg_iou) {   // redusing the thresh_calc_avg_iou increase fp
+                            // printf("prob = %f", prob);
                             int z, found = 0;
                             for (z = checkpoint_detections_count; z < detections_count - 1; ++z) {
                                 if (detections[z].unique_truth_index == truth_index) {
@@ -1165,12 +1188,15 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
                             }
 
                             if (truth_index > -1 && found == 0) {
+                                // printf(", TP iou %f, box [%f, %f, %f, %f] \n",  max_iou, round((dets[i].bbox.x - dets[i].bbox.w/2)*val[t].w), round((dets[i].bbox.y - dets[i].bbox.h/2)*val[t].h), round((dets[i].bbox.x + dets[i].bbox.w/2)*val[t].w), round((dets[i].bbox.y + dets[i].bbox.h/2)*val[t].h));
                                 avg_iou += max_iou;
                                 ++tp_for_thresh;
                                 avg_iou_per_class[class_id] += max_iou;
                                 tp_for_thresh_per_class[class_id]++;
                             }
+
                             else{
+                                // printf(", FP iou %f, box [%f, %f, %f, %f] \n",  max_iou, round((dets[i].bbox.x - dets[i].bbox.w/2)*val[t].w), round((dets[i].bbox.y - dets[i].bbox.h/2)*val[t].h), round((dets[i].bbox.x + dets[i].bbox.w/2)*val[t].w), round((dets[i].bbox.y + dets[i].bbox.h/2)*val[t].h));
                                 fp_for_thresh++;
                                 fp_for_thresh_per_class[class_id]++;
                             }
@@ -1191,8 +1217,6 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
             //if(errors_in_this_image > 0) fwrite(buff, sizeof(char), strlen(buff), reinforcement_fd);
 
             free_detections(dets, nboxes);
-            free(truth);
-            free(truth_dif);
             free(id);
             free_image(val[t]);
             free_image(val_resized[t]);
@@ -1286,6 +1310,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
     free(truth_flags);
 
+
     double mean_average_precision = 0;
 
     for (i = 0; i < classes; ++i) {
@@ -1340,12 +1365,16 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
             avg_precision = avg_precision / map_points;
         }
 
-        printf("class_id = %d, name = %s, ap = %2.2f%%   \t (TP = %d, FP = %d) \n",
-            i, names[i], avg_precision * 100, tp_for_thresh_per_class[i], fp_for_thresh_per_class[i]);
+        //printf("truth_classes_count = %d \n", truth_classes_count[i]); //(float)(truth_classes_count[i] - tp_for_thresh_per_class[i])
+        //printf("tp_for_thresh_per_class = %d \n", tp_for_thresh_per_class[i]);
+        //printf("FN = %f \n", (float)(truth_classes_count[i] - tp_for_thresh_per_class[i]));
+
+        printf("class_id = %d, name = %s, ap = %2.2f%%   \t (TP = %d, FP = %d, FN = %f) \n",
+            i, names[i], avg_precision * 100, tp_for_thresh_per_class[i], fp_for_thresh_per_class[i], (float)(truth_classes_count[i] - tp_for_thresh_per_class[i]));
 
         float class_precision = (float)tp_for_thresh_per_class[i] / ((float)tp_for_thresh_per_class[i] + (float)fp_for_thresh_per_class[i]);
         float class_recall = (float)tp_for_thresh_per_class[i] / ((float)tp_for_thresh_per_class[i] + (float)(truth_classes_count[i] - tp_for_thresh_per_class[i]));
-        //printf("Precision = %1.2f, Recall = %1.2f, avg IOU = %2.2f%% \n\n", class_precision, class_recall, avg_iou_per_class[i]);
+        printf("Precision = %1.2f, Recall = %1.2f, avg IOU = %2.2f%% \n\n", class_precision, class_recall, avg_iou_per_class[i]);
 
         mean_average_precision += avg_precision;
     }
@@ -1373,14 +1402,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     free(detections);
     free(truth_classes_count);
     free(detection_per_class_count);
-    free(paths);
-    free(paths_dif);
-    free_list_contents(plist);
-    free_list(plist);
-    if (plist_dif) {
-        free_list_contents(plist_dif);
-        free_list(plist_dif);
-    }
+
     free(avg_iou_per_class);
     free(tp_for_thresh_per_class);
     free(fp_for_thresh_per_class);
@@ -1502,7 +1524,6 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
             printf("\r loaded \t image: %d \t box: %d", i + 1, number_of_boxes);
         }
         free(buff);
-        free(truth);
     }
     printf("\n all loaded. \n");
     printf("\n calculating k-means++ ...");
@@ -1706,6 +1727,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 
         int nboxes = 0;
         detection *dets = get_network_boxes(&net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes, letter_box);
+        printf("\n width = %d, height = %d, letter_box = %d \n", im.w, im.h, letter_box);
         if (nms) {
             if (l.nms_kind == DEFAULT_NMS) do_nms_sort(dets, nboxes, l.classes, nms);
             else diounms_sort(dets, nboxes, l.classes, nms, l.nms_kind, l.beta_nms);
@@ -1985,7 +2007,7 @@ void run_detector(int argc, char **argv)
     char *out_filename = find_char_arg(argc, argv, "-out_filename", 0);
     char *outfile = find_char_arg(argc, argv, "-out", 0);
     char *prefix = find_char_arg(argc, argv, "-prefix", 0);
-    float thresh = find_float_arg(argc, argv, "-thresh", .25);    // 0.24
+    float thresh = find_float_arg(argc, argv, "-thresh", .24);    // 0.25
     float iou_thresh = find_float_arg(argc, argv, "-iou_thresh", .5);    // 0.5 for mAP
     float hier_thresh = find_float_arg(argc, argv, "-hier", .5);
     int cam_index = find_int_arg(argc, argv, "-c", 0);

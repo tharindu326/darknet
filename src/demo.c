@@ -107,11 +107,14 @@ void *detect_in_thread(void *ptr)
         det_img = cv_images[(demo_index + avg_frames / 2 + 1) % avg_frames];
         demo_index = (demo_index + 1) % avg_frames;
 
-        if (letter_box)
+        if (letter_box) {
             dets = get_network_boxes(&net, get_width_mat(in_img), get_height_mat(in_img), demo_thresh, demo_thresh, 0, 1, &nboxes, 1); // letter box
-        else
+            printf("\n ===================== letter_box = %d ========get_height_mat=====\n", letter_box);
+        }
+        else {
             dets = get_network_boxes(&net, net.w, net.h, demo_thresh, demo_thresh, 0, 1, &nboxes, 0); // resized
-
+            printf("\n ===================== letter_box = %d =========net.w=========\n", letter_box);
+        }
         //const float nms = .45;
         //if (nms) {
         //    if (l.nms_kind == DEFAULT_NMS) do_nms_sort(dets, nboxes, l.classes, nms);

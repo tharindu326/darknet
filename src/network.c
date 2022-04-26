@@ -911,7 +911,7 @@ void fill_network_boxes(network *net, int w, int h, float thresh, float hier, in
         layer l = net->layers[j];
         if (l.type == YOLO) {
             int count = get_yolo_detections(l, w, h, net->w, net->h, thresh, map, relative, dets, letter);
-            dets += count;
+            // printf("Dets %d \n", dets);
             if (prev_classes < 0) prev_classes = l.classes;
             else if (prev_classes != l.classes) {
                 printf(" Error: Different [yolo] layers have different number of classes = %d and %d - check your cfg-file! \n",
